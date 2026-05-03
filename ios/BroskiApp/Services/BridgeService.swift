@@ -1,8 +1,6 @@
 import Foundation
 import Network
 
-// MARK: - Models
-
 struct BroskiEvent: Decodable, Identifiable {
     let id: String
     let type: String
@@ -34,43 +32,32 @@ struct BroskiEvent: Decodable, Identifiable {
 }
 
 struct EventBatch: Decodable { let events: [BroskiEvent] }
-
 struct SessionInfo: Decodable, Identifiable {
     let id: String
     let workdir: String
     let backend: String
     let clientCount: Int
 }
-
-struct BridgeConfig: Codable {
-    let url: String
-    let secret: String
-    let v: Int
-}
-
+struct BridgeConfig: Codable { let url: String; let secret: String; let v: Int }
 struct FileNode: Identifiable, Decodable {
     let id: String
     let name: String
     let type: String
     let path: String
     let children: [FileNode]?
-
     enum CodingKeys: String, CodingKey { case name, type, path, children }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        name     = try c.decode(String.self, forKey: .name)
-        type     = try c.decode(String.self, forKey: .type)
-        path     = try c.decode(String.self, forKey: .path)
+        name = try c.decode(String.self, forKey: .name)
+        type = try c.decode(String.self, forKey: .type)
+        path = try c.decode(String.self, forKey: .path)
         children = try? c.decode([FileNode].self, forKey: .children)
-        id       = path
+        id = path
     }
 }
 
-enum NetworkInterface {
-    case wifi, cellular, other, none
-}
+enum NetworkInterface { case wifi, cellular, other, none }
 
-// MARK: - BridgeService
 @MainActor
 class BridgeService: ObservableObject {
     @Published var isConnected = false
@@ -90,7 +77,8 @@ class BridgeService: ObservableObject {
     enum AgentStatus { case idle, thinking, running(tool: String) }
 
     private let configKey = "broski.bridgeConfig"
-    private let relayKey  = "broski.relayURL"
+    private let relayKey = "broski.relayURL"
+    private let maxEvents = 400
 
     var savedConfig: BridgeConfig? {
         get {
@@ -99,14 +87,10 @@ class BridgeService: ObservableObject {
             return c
         }
         set {
-            if let v = newValue, let d = try? JSONEncoder().encode(v) {
-                UserDefaults.standard.set(d, forKey: configKey)
-            } else {
-                UserDefaults.standard.removeObject(forKey: configKey)
-            }
+            if let v = newValue, let d = try? JSONEncoder().encode(v) { UserDefaults.standard.set(d, forKey: configKey) }
+            else { UserDefaults.standard.removeObject(forKey: configKey) }
         }
     }
-
     var savedRelayURL: String? {
         get { UserDefaults.standard.string(forKey: relayKey) }
         set { UserDefaults.standard.set(newValue, forKey: relayKey) }
@@ -121,7 +105,6 @@ class BridgeService: ObservableObject {
     private let pathMonitorQueue = DispatchQueue(label: "broski.pathmonitor")
     private var lastKnownInterface: NetworkInterface = .none
 
-    // MARK: - Connect
     func connect(config: BridgeConfig) {
         self.config = config
         savedConfig = config
@@ -140,16 +123,10 @@ class BridgeService: ObservableObject {
 
     private func _connect() {
         guard let cfg = config else { return }
-
         let effectiveURLString: String
-        if isOnCellular, let relay = relayURL, !relay.isEmpty {
-            effectiveURLString = relay
-        } else if isOnCellular {
-            connectionError = "You're on cellular. Configure a relay URL in Settings to connect away from Wi-Fi."
-            return
-        } else {
-            effectiveURLString = cfg.url
-        }
+        if isOnCellular, let relay = relayURL, !relay.isEmpty { effectiveURLString = relay }
+        else if isOnCellular { connectionError = "You're on cellular. Configure a relay URL in Settings to connect away from Wi-Fi."; return }
+        else { effectiveURLString = cfg.url }
 
         guard let url = URL(string: effectiveURLString) else {
             connectionError = "Invalid bridge URL: \(effectiveURLString)"
@@ -170,7 +147,6 @@ class BridgeService: ObservableObject {
         }
     }
 
-    // MARK: - NWPathMonitor (Wi-Fi <-> Cellular handoff)
     private func startPathMonitor() {
         pathMonitor?.cancel()
         let monitor = NWPathMonitor()
@@ -186,24 +162,19 @@ class BridgeService: ObservableObject {
                     return
                 }
                 self.lastKnownInterface = iface
-
                 switch iface {
                 case .wifi, .other:
-                    // Back on a fast interface — reconnect to local bridge
                     self.connectionError = nil
-                    self._reconnect(reason: "Interface changed to \(iface)")
-
+                    self._reconnect(reason: "Interface changed")
                 case .cellular:
                     self.teardownSocket()
-                    if let relay = self.relayURL, !relay.isEmpty {
-                        self._connect()
-                    } else {
+                    if let relay = self.relayURL, !relay.isEmpty { self._connect() }
+                    else {
                         self.isConnected = false
                         self.isAuthenticated = false
                         self.agentStatus = .idle
                         self.connectionError = "Switched to cellular. Set a relay URL in Settings to stay connected."
                     }
-
                 case .none:
                     self.teardownSocket()
                     self.isConnected = false
@@ -217,7 +188,7 @@ class BridgeService: ObservableObject {
 
     private func classifyPath(_ path: NWPath) -> NetworkInterface {
         guard path.status == .satisfied else { return .none }
-        if path.usesInterfaceType(.wifi)     { return .wifi }
+        if path.usesInterfaceType(.wifi) { return .wifi }
         if path.usesInterfaceType(.cellular) { return .cellular }
         return .other
     }
@@ -228,7 +199,6 @@ class BridgeService: ObservableObject {
         _connect()
     }
 
-    // MARK: - Receive Loop
     private func receiveLoop() async {
         while !Task.isCancelled {
             guard let ws = webSocketTask else { break }
@@ -236,21 +206,31 @@ class BridgeService: ObservableObject {
                 let msg = try await ws.receive()
                 switch msg {
                 case .string(let t): handleRaw(t)
-                case .data(let d):   if let t = String(data: d, encoding: .utf8) { handleRaw(t) }
-                @unknown default:    break
+                case .data(let d): if let t = String(data: d, encoding: .utf8) { handleRaw(t) }
+                @unknown default: break
                 }
             } catch {
                 isConnected = false
                 isAuthenticated = false
                 agentStatus = .idle
-                // Only auto-retry on Wi-Fi; cellular drops handled by pathMonitor
                 guard !isOnCellular else { break }
-                connectionError = "Reconnecting\u2026"
+                connectionError = "Reconnecting…"
                 try? await Task.sleep(nanoseconds: 3_000_000_000)
                 _connect()
                 break
             }
         }
+    }
+
+    private func appendEvent(_ e: BroskiEvent) {
+        events.append(e)
+        if events.count > maxEvents {
+            events.removeFirst(events.count - maxEvents)
+        }
+    }
+
+    func clearChatHistory() {
+        events.removeAll()
     }
 
     private func handleRaw(_ text: String) {
@@ -271,7 +251,7 @@ class BridgeService: ObservableObject {
                     send(["type": "pong"])
                     continue
                 }
-                events.append(e)
+                appendEvent(e)
             }
             return
         }
@@ -301,17 +281,14 @@ class BridgeService: ObservableObject {
             if let raw = try? JSONSerialization.data(withJSONObject: json["tree"] ?? []),
                let nodes = try? dec.decode([FileNode].self, from: raw) { fileTree = nodes }
         case "file_content":
-            if let p = json["path"] as? String, let c = json["content"] as? String {
-                fileContent = (path: p, content: c)
-            }
+            if let p = json["path"] as? String, let c = json["content"] as? String { fileContent = (path: p, content: c) }
         default: break
         }
     }
 
-    // MARK: - Teardown
     private func teardownSocket() {
         pingTimer?.invalidate(); pingTimer = nil
-        receiveTask?.cancel();   receiveTask = nil
+        receiveTask?.cancel(); receiveTask = nil
         webSocketTask?.cancel(with: .normalClosure, reason: nil)
         webSocketTask = nil
         isConnected = false
@@ -326,7 +303,6 @@ class BridgeService: ObservableObject {
         events = []; sessions = []; currentSessionId = nil
     }
 
-    // MARK: - Relay
     func setRelayURL(_ url: String) {
         let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
         relayURL = trimmed.isEmpty ? nil : trimmed
@@ -334,7 +310,6 @@ class BridgeService: ObservableObject {
         if isOnCellular { _connect() }
     }
 
-    // MARK: - Send helpers
     func send(_ dict: [String: String]) {
         guard let ws = webSocketTask,
               let data = try? JSONSerialization.data(withJSONObject: dict),
@@ -342,10 +317,10 @@ class BridgeService: ObservableObject {
         ws.send(.string(text)) { _ in }
     }
 
-    func sendMessage(_ text: String)      { send(["type": "message", "text": text]) }
+    func sendMessage(_ text: String) { send(["type": "message", "text": text]) }
     func createSession(workdir: String, backend: String) { send(["type": "session_create", "workdir": workdir, "backend": backend]) }
-    func listSessions()                   { send(["type": "session_list"]) }
-    func requestFileTree(path: String)    { send(["type": "file_tree", "path": path]) }
+    func listSessions() { send(["type": "session_list"]) }
+    func requestFileTree(path: String) { send(["type": "file_tree", "path": path]) }
     func requestFileContent(path: String) { send(["type": "file_read", "path": path]) }
-    private func sendPing()               { lastPingSent = Date(); send(["type": "ping"]) }
+    private func sendPing() { lastPingSent = Date(); send(["type": "ping"]) }
 }

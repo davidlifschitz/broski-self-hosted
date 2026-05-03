@@ -8,11 +8,12 @@ A self-hosted replacement for [broskiapp.com](https://broskiapp.com) — direct 
 iPhone (SwiftUI) ──── WebSocket ──── Mac Bridge (Node.js) ──── Claude Code / OpenCode / Custom Agent
 ```
 
-- **Zero cloud** — direct local WebSocket, no relay server
+- **Zero cloud** — direct local WebSocket on Wi-Fi for minimum latency
 - **RTT-adaptive batching** — flushes at `clamp(8ms, RTT×0.5, 100ms)`
 - **mDNS auto-discovery** — iPhone finds bridge automatically on same Wi-Fi
 - **Native iOS rendering** — SwiftUI + AVFoundation, no WKWebView
 - **Multi-backend** — Claude Code, OpenCode, or any custom agent
+- **Cellular relay fallback** — optional `wss://` relay URL for away-from-home access
 
 ## Quick Start
 
@@ -20,22 +21,23 @@ iPhone (SwiftUI) ──── WebSocket ──── Mac Bridge (Node.js) ──
 
 ```bash
 cd bridge
+cp .env.example .env
 npm install
-node bridge.js
+npm start
 # Scan the QR code with the iOS app
 ```
 
 ### Backend options
 
 ```bash
-BACKEND=claude node bridge.js       # Claude Code (default)
-BACKEND=opencode node bridge.js     # OpenCode
-BACKEND=custom CUSTOM_CMD="python my_agent.py" node bridge.js
+BACKEND=claude npm start
+BACKEND=opencode npm start
+BACKEND=custom CUSTOM_CMD="python my_agent.py" npm start
 ```
 
 ### iOS App
 
-Open `ios/BroskiApp.xcodeproj` in Xcode 15+, set your Team, build to device (iOS 16+).
+Open the iOS project/package in Xcode 15+, set your Team, and build to a physical device (iOS 16+).
 
 Required `Info.plist` keys:
 ```xml
@@ -47,9 +49,74 @@ Required `Info.plist` keys:
 <array><string>_broski._tcp</string></array>
 ```
 
-## Remote Access (Wi-Fi → Cellular)
+## Relay Deploy Guide
 
-Install [Tailscale](https://tailscale.com) on both your Mac and iPhone. The bridge URL becomes `ws://100.x.x.x:7337` — works identically over cellular.
+The fastest production-ish path is Fly.io because it supports long-lived WebSockets well.
+
+### 1) Install Fly CLI
+
+```bash
+brew install flyctl
+fly auth login
+```
+
+### 2) Create `fly.toml`
+
+```toml
+app = "broski-relay"
+primary_region = "ewr"
+
+[build]
+
+[http_service]
+  internal_port = 7337
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 256
+```
+
+### 3) Add a Dockerfile in `bridge/`
+
+```dockerfile
+FROM node:20-alpine
+WORKDIR /app
+COPY package.json package-lock.json* ./
+RUN npm install --omit=dev
+COPY . .
+EXPOSE 7337
+CMD ["node", "bridge.js"]
+```
+
+### 4) Set secrets and deploy
+
+```bash
+cd bridge
+fly launch --no-deploy
+fly secrets set BROSKI_SECRET=supersecret BACKEND=claude
+fly deploy
+```
+
+### 5) Use the relay in iOS
+
+Paste your Fly hostname into Settings as:
+
+```text
+wss://broski-relay.fly.dev
+```
+
+When the phone leaves Wi-Fi, the app automatically switches from the local `ws://192.168.x.x:7337` bridge to the relay URL if configured.
+
+## Alternative Relay Options
+
+- **Tailscale** — easiest private setup, great if both Mac and iPhone can run Tailscale
+- **ngrok** — fastest demo tunnel, but less ideal for persistent daily use
+- **Cloudflare Tunnel** — solid if you already use Cloudflare
 
 ## WebSocket Protocol
 
@@ -72,6 +139,13 @@ Install [Tailscale](https://tailscale.com) on both your Mac and iPhone. The brid
   { "type": "status", "status": "ready", "backend": "claude" }
 ]}
 ```
+
+## Remaining TODOs
+
+- Add `AppIcon.appiconset`
+- Add syntax-highlighted code fences in chat
+- Add streaming token-by-token typewriter rendering
+- Harden relay auth / TLS / rate limits for public deployment
 
 ## License
 

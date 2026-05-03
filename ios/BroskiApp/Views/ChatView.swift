@@ -11,7 +11,6 @@ struct ChatView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Status bar
             HStack(spacing: 6) {
                 AgentStatusIndicator(status: bridge.agentStatus)
                 Spacer()
@@ -28,21 +27,19 @@ struct ChatView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 8) {
-                        if chatEvents.isEmpty {
-                            emptyState
-                        }
+                        if chatEvents.isEmpty { emptyState }
                         ForEach(chatEvents) { event in
-                            EventBubble(event: event) {
-                                pendingToolEvent = event
-                            }
-                            .id(event.id)
+                            EventBubble(event: event) { pendingToolEvent = event }
+                                .id(event.id)
                         }
                     }
                     .padding()
                 }
                 .onChange(of: chatEvents.count) { _ in
                     if let last = chatEvents.last {
-                        withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(last.id, anchor: .bottom) }
+                        withAnimation(.easeOut(duration: 0.15)) {
+                            proxy.scrollTo(last.id, anchor: .bottom)
+                        }
                     }
                 }
             }
@@ -70,27 +67,28 @@ struct ChatView: View {
             }
             .padding(.horizontal).padding(.vertical, 8).background(.bar)
         }
-        .navigationTitle("Agent Chat").navigationBarTitleDisplayMode(.inline)
-        .navigationBarItems(trailing:
-            NavigationLink {
-                FileBrowserView(bridge: bridge)
-                    .onAppear {
-                        if let sid = bridge.currentSessionId {
-                            // request file tree rooted at workdir
-                            bridge.requestFileTree(path: "~")
-                        }
+        .navigationTitle("Agent Chat")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                HStack(spacing: 12) {
+                    Button {
+                        bridge.clearChatHistory()
+                    } label: {
+                        Image(systemName: "trash")
                     }
-            } label: {
-                Image(systemName: "folder")
+                    NavigationLink {
+                        FileBrowserView(bridge: bridge)
+                            .onAppear { bridge.requestFileTree(path: "~") }
+                    } label: {
+                        Image(systemName: "folder")
+                    }
+                }
             }
-        )
+        }
         .sheet(item: $pendingToolEvent) { event in
             DiffApproveView(event: event) { approved in
-                if approved {
-                    // Re-send approval signal (agent is already running; this is cosmetic for now)
-                    // In a real integration wire this to a tool_response message
-                    bridge.sendMessage("[approved]")
-                }
+                if approved { bridge.sendMessage("[approved]") }
                 pendingToolEvent = nil
             }
         }
@@ -118,7 +116,6 @@ struct ChatView: View {
     }
 }
 
-// MARK: - Agent Status Indicator
 struct AgentStatusIndicator: View {
     let status: BridgeService.AgentStatus
     var body: some View {
@@ -138,7 +135,6 @@ struct AgentStatusIndicator: View {
     }
 }
 
-// MARK: - Event Bubble
 struct EventBubble: View {
     let event: BroskiEvent
     var onToolTap: (() -> Void)? = nil
@@ -148,10 +144,8 @@ struct EventBubble: View {
         case "text", "output":
             HStack(alignment: .top, spacing: 8) {
                 Image(systemName: "cpu").font(.caption).foregroundStyle(.secondary).padding(.top, 2)
-                Text(event.text ?? "")
-                    .font(.system(.body, design: .monospaced))
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
+                MarkdownText(event.text ?? "")
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
             .padding(.vertical, 2)
 
@@ -193,6 +187,24 @@ struct EventBubble: View {
 
         default:
             EmptyView()
+        }
+    }
+}
+
+struct MarkdownText: View {
+    let text: String
+
+    init(_ text: String) { self.text = text }
+
+    var body: some View {
+        if let attr = try? AttributedString(markdown: text) {
+            Text(attr)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+        } else {
+            Text(text)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 }
