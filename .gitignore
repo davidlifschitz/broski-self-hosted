@@ -1,0 +1,22 @@
+# Node
+node_modules/
+npm-debug.log
+.env
+
+# Xcode
+*.xcworkspace/xcuserdata/
+DerivedData/
+*.xccheckout
+*.moved-aside
+*.pbxuser
+!default.pbxuser
+*.mode1v2
+!default.mode1v2
+*.mode2v2
+!default.mode2v2
+*.perspectivev3
+!default.perspectivev3
+build/
+
+# macOS
+.DS_Store
