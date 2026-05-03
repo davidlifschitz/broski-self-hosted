@@ -5,6 +5,7 @@ struct HomeView: View {
     @StateObject var mdns = MDNSDiscovery()
     @State private var showQRScanner = false
     @State private var showManualEntry = false
+    @State private var showSettings = false
     @State private var manualURL = ""
     @State private var manualSecret = ""
 
@@ -19,18 +20,21 @@ struct HomeView: View {
             }
             .navigationTitle("Broski")
             .toolbar {
-                if bridge.isAuthenticated {
-                    ToolbarItem(placement: .navigationBarTrailing) {
-                        Button("Disconnect", role: .destructive) { bridge.disconnect() }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button { showSettings = true } label: {
+                        Image(systemName: "gearshape")
                     }
                 }
             }
         }
         .onAppear {
             mdns.start()
-            bridge.connectIfSaved()   // auto-reconnect if config persisted
+            bridge.connectIfSaved()
         }
         .onDisappear { mdns.stop() }
+        .sheet(isPresented: $showSettings) {
+            SettingsView(bridge: bridge)
+        }
     }
 
     var pairingScreen: some View {
@@ -45,6 +49,23 @@ struct HomeView: View {
                         .multilineTextAlignment(.center).padding(.horizontal)
                 }
                 .padding(.top, 40)
+
+                if bridge.isOnCellular {
+                    HStack(spacing: 10) {
+                        Image(systemName: "antenna.radiowaves.left.and.right").foregroundStyle(.orange)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("You're on cellular").font(.subheadline.bold())
+                            Text("Connect to Wi-Fi or set a relay URL in Settings.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("Settings") { showSettings = true }.font(.caption.bold())
+                    }
+                    .padding()
+                    .background(Color.orange.opacity(0.1))
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .padding(.horizontal)
+                }
 
                 Button { showQRScanner = true } label: {
                     Label("Scan QR Code", systemImage: "qrcode.viewfinder")
