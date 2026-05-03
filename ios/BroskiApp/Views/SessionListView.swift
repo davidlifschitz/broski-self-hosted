@@ -18,9 +18,16 @@ struct SessionListView: View {
                         SessionRow(session: session)
                     }
                 }
+                if bridge.sessions.isEmpty {
+                    VStack(spacing: 8) {
+                        Text("No active sessions").foregroundStyle(.secondary)
+                        Button("Create one") { showNewSession = true }.font(.subheadline)
+                    }
+                    .frame(maxWidth: .infinity).padding(.vertical, 8)
+                }
             } header: {
                 HStack {
-                    Text("Active Sessions")
+                    Text("Sessions")
                     Spacer()
                     Button { bridge.listSessions() } label: {
                         Image(systemName: "arrow.clockwise").font(.caption)

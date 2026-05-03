@@ -21,12 +21,15 @@ struct HomeView: View {
             .toolbar {
                 if bridge.isAuthenticated {
                     ToolbarItem(placement: .navigationBarTrailing) {
-                        Button("Disconnect") { bridge.disconnect() }.foregroundStyle(.red)
+                        Button("Disconnect", role: .destructive) { bridge.disconnect() }
                     }
                 }
             }
         }
-        .onAppear { mdns.start() }
+        .onAppear {
+            mdns.start()
+            bridge.connectIfSaved()   // auto-reconnect if config persisted
+        }
         .onDisappear { mdns.stop() }
     }
 
@@ -80,26 +83,24 @@ struct HomeView: View {
                     .font(.subheadline).foregroundStyle(.secondary)
 
                 if let err = bridge.connectionError {
-                    Text(err).font(.caption).foregroundStyle(.red).padding(.horizontal)
+                    Label(err, systemImage: "exclamationmark.triangle")
+                        .font(.caption).foregroundStyle(.red)
+                        .padding(.horizontal).multilineTextAlignment(.center)
                 }
             }
             .padding(.bottom, 40)
         }
         .sheet(isPresented: $showQRScanner) {
-            QRScanSheet { payload in
-                showQRScanner = false
-                handleQRPayload(payload)
-            }
+            QRScanSheet { payload in showQRScanner = false; handleQR(payload) }
         }
         .sheet(isPresented: $showManualEntry) {
             ManualEntrySheet(url: $manualURL, secret: $manualSecret) {
-                showManualEntry = false
-                connectManual()
+                showManualEntry = false; connectManual()
             }
         }
     }
 
-    func handleQRPayload(_ payload: String) {
+    func handleQR(_ payload: String) {
         guard let data = payload.data(using: .utf8),
               let cfg = try? JSONDecoder().decode(BridgeConfig.self, from: data) else {
             bridge.connectionError = "Invalid QR code"; return

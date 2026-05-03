@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>Broski</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.yourname.broski</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+
+    <!-- Camera — required for QR pairing -->
+    <key>NSCameraUsageDescription</key>
+    <string>Used to scan the bridge QR code from your Mac terminal.</string>
+
+    <!-- Local Network — required for mDNS discovery -->
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Used to discover your Broski bridge server on the local Wi-Fi network.</string>
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_broski._tcp</string>
+    </array>
+
+    <!-- Background reconnect -->
+    <key>UIBackgroundModes</key>
+    <array>
+        <string>fetch</string>
+    </array>
+
+    <key>UILaunchScreen</key>
+    <dict/>
+    <key>UIApplicationSceneManifest</key>
+    <dict>
+        <key>UIApplicationSupportsMultipleScenes</key>
+        <false/>
+    </dict>
+</dict>
+</plist>
