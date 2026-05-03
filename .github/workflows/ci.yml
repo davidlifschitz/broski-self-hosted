@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  bridge:
+    name: Bridge (Node.js)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: bridge
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: bridge/package.json
+      - run: npm install
+      - name: Verify bridge starts and exits cleanly
+        run: |
+          timeout 5s node bridge.js || code=$?;
+          # Exit code 124 = timed out (still running) = success for a server
+          if [ "${code:-0}" -eq 124 ] || [ "${code:-0}" -eq 0 ]; then
+            echo "Bridge started OK"; exit 0;
+          else
+            echo "Bridge crashed with exit $code"; exit 1;
+          fi
+        env:
+          BROSKI_SECRET: ci-test-secret
+          BACKEND: claude
+
+  ios-build:
+    name: iOS Build Check
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_15.4.app
+      - name: Resolve Swift Package
+        working-directory: ios
+        run: swift package resolve || true
+      - name: Build (no signing)
+        working-directory: ios
+        run: |
+          xcodebuild \
+            -scheme BroskiApp \
+            -destination 'generic/platform=iOS Simulator' \
+            -configuration Debug \
+            CODE_SIGNING_ALLOWED=NO \
+            build | xcpretty || xcodebuild \
+            -scheme BroskiApp \
+            -destination 'generic/platform=iOS Simulator' \
+            -configuration Debug \
+            CODE_SIGNING_ALLOWED=NO \
+            build

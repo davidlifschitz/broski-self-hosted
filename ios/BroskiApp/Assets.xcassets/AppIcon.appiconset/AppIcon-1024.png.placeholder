@@ -1,0 +1,3 @@
+Replace this file with your 1024x1024 PNG app icon.
+Run: sips -z 1024 1024 your-icon.png --out AppIcon-1024.png
+Then delete this .placeholder file.

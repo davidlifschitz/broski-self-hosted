@@ -7,6 +7,7 @@ struct BroskiEvent: Decodable, Identifiable {
     let sessionId: String?
     let ts: Double?
     let text: String?
+    let delta: String?
     let status: String?
     let backend: String?
     let name: String?
@@ -14,7 +15,7 @@ struct BroskiEvent: Decodable, Identifiable {
     let toolId: String?
 
     enum CodingKeys: String, CodingKey {
-        case id, type, sessionId, ts, text, status, backend, name, inputJson, toolId
+        case id, type, sessionId, ts, text, delta, status, backend, name, inputJson, toolId
     }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -23,6 +24,7 @@ struct BroskiEvent: Decodable, Identifiable {
         sessionId = try? c.decode(String.self, forKey: .sessionId)
         ts        = try? c.decode(Double.self, forKey: .ts)
         text      = try? c.decode(String.self, forKey: .text)
+        delta     = try? c.decode(String.self, forKey: .delta)
         status    = try? c.decode(String.self, forKey: .status)
         backend   = try? c.decode(String.self, forKey: .backend)
         name      = try? c.decode(String.self, forKey: .name)
@@ -73,13 +75,17 @@ class BridgeService: ObservableObject {
     @Published var networkInterface: NetworkInterface = .none
     @Published var isOnCellular: Bool = false
     @Published var relayURL: String? = nil
+    /// Streaming: last partial assistant message being assembled token-by-token
+    @Published var streamingText: String = ""
 
     enum AgentStatus { case idle, thinking, running(tool: String) }
 
-    private let configKey = "broski.bridgeConfig"
-    private let relayKey = "broski.relayURL"
-    private let maxEvents = 400
+    private let configKey   = "broski.bridgeConfig"
+    private let relayKey    = "broski.relayURL"
+    private let historyKey  = "broski.sessionHistory"
+    private let maxEvents   = 400
 
+    // MARK: - Persistence helpers
     var savedConfig: BridgeConfig? {
         get {
             guard let d = UserDefaults.standard.data(forKey: configKey),
@@ -96,6 +102,25 @@ class BridgeService: ObservableObject {
         set { UserDefaults.standard.set(newValue, forKey: relayKey) }
     }
 
+    /// Persist events for the active session so they survive app restarts.
+    private func persistHistory() {
+        guard let sid = currentSessionId,
+              let data = try? JSONEncoder().encode(events) else { return }
+        UserDefaults.standard.set(data, forKey: "\(historyKey).\(sid)")
+    }
+    private func loadHistory(for sessionId: String) {
+        guard let data = UserDefaults.standard.data(forKey: "\(historyKey).\(sessionId)"),
+              let saved = try? JSONDecoder().decode([BroskiEvent].self, from: data) else { return }
+        events = Array(saved.suffix(maxEvents))
+    }
+    func clearChatHistory() {
+        events.removeAll()
+        if let sid = currentSessionId {
+            UserDefaults.standard.removeObject(forKey: "\(historyKey).\(sid)")
+        }
+    }
+
+    // MARK: - Private state
     private var webSocketTask: URLSessionWebSocketTask?
     private var config: BridgeConfig?
     private var pingTimer: Timer?
@@ -105,6 +130,7 @@ class BridgeService: ObservableObject {
     private let pathMonitorQueue = DispatchQueue(label: "broski.pathmonitor")
     private var lastKnownInterface: NetworkInterface = .none
 
+    // MARK: - Connect
     func connect(config: BridgeConfig) {
         self.config = config
         savedConfig = config
@@ -125,17 +151,17 @@ class BridgeService: ObservableObject {
         guard let cfg = config else { return }
         let effectiveURLString: String
         if isOnCellular, let relay = relayURL, !relay.isEmpty { effectiveURLString = relay }
-        else if isOnCellular { connectionError = "You're on cellular. Configure a relay URL in Settings to connect away from Wi-Fi."; return }
-        else { effectiveURLString = cfg.url }
+        else if isOnCellular {
+            connectionError = "You're on cellular. Configure a relay URL in Settings to connect away from Wi-Fi."
+            return
+        } else { effectiveURLString = cfg.url }
 
         guard let url = URL(string: effectiveURLString) else {
             connectionError = "Invalid bridge URL: \(effectiveURLString)"
             return
         }
-
         connectionError = nil
         teardownSocket()
-
         let session = URLSession(configuration: .default)
         webSocketTask = session.webSocketTask(with: url)
         webSocketTask?.resume()
@@ -147,6 +173,7 @@ class BridgeService: ObservableObject {
         }
     }
 
+    // MARK: - Path monitor (Wi-Fi ↔ Cellular handoff)
     private func startPathMonitor() {
         pathMonitor?.cancel()
         let monitor = NWPathMonitor()
@@ -165,7 +192,7 @@ class BridgeService: ObservableObject {
                 switch iface {
                 case .wifi, .other:
                     self.connectionError = nil
-                    self._reconnect(reason: "Interface changed")
+                    self._reconnect(reason: "Interface changed to Wi-Fi")
                 case .cellular:
                     self.teardownSocket()
                     if let relay = self.relayURL, !relay.isEmpty { self._connect() }
@@ -199,6 +226,7 @@ class BridgeService: ObservableObject {
         _connect()
     }
 
+    // MARK: - Receive loop
     private func receiveLoop() async {
         while !Task.isCancelled {
             guard let ws = webSocketTask else { break }
@@ -222,15 +250,11 @@ class BridgeService: ObservableObject {
         }
     }
 
+    // MARK: - Event handling
     private func appendEvent(_ e: BroskiEvent) {
         events.append(e)
-        if events.count > maxEvents {
-            events.removeFirst(events.count - maxEvents)
-        }
-    }
-
-    func clearChatHistory() {
-        events.removeAll()
+        if events.count > maxEvents { events.removeFirst(events.count - maxEvents) }
+        persistHistory()
     }
 
     private func handleRaw(_ text: String) {
@@ -239,19 +263,30 @@ class BridgeService: ObservableObject {
 
         if let batch = try? dec.decode(EventBatch.self, from: data) {
             for e in batch.events {
-                if e.type == "status" {
+                switch e.type {
+                case "status":
                     switch e.status {
-                    case "thinking": agentStatus = .thinking
+                    case "thinking": agentStatus = .thinking; streamingText = ""
                     case "idle", "exited": agentStatus = .idle
                     default: break
                     }
-                } else if e.type == "tool_use" {
+                case "text_delta":
+                    // Streaming token — accumulate in streamingText, don't add to events list yet
+                    if let d = e.delta { streamingText += d }
+                    continue
+                case "text":
+                    // Full text arrived — clear streaming buffer, add to history
+                    streamingText = ""
+                    appendEvent(e)
+                case "tool_use":
                     agentStatus = .running(tool: e.name ?? "tool")
-                } else if e.type == "ping" {
+                    appendEvent(e)
+                case "ping":
                     send(["type": "pong"])
                     continue
+                default:
+                    appendEvent(e)
                 }
-                appendEvent(e)
             }
             return
         }
@@ -268,7 +303,13 @@ class BridgeService: ObservableObject {
             connectionError = "Auth failed — wrong secret"
             savedConfig = nil
         case "session_created", "session_joined":
-            currentSessionId = json["sessionId"] as? String
+            let sid = json["sessionId"] as? String
+            currentSessionId = sid
+            if let sid { loadHistory(for: sid) }
+        case "session_not_found":
+            // Stale session ID — clear it and prompt user to create a new session
+            currentSessionId = nil
+            connectionError = "Previous session ended. Create a new session to continue."
         case "session_list":
             if let raw = try? JSONSerialization.data(withJSONObject: json["sessions"] ?? []),
                let list = try? dec.decode([SessionInfo].self, from: raw) { sessions = list }
@@ -286,6 +327,7 @@ class BridgeService: ObservableObject {
         }
     }
 
+    // MARK: - Teardown
     private func teardownSocket() {
         pingTimer?.invalidate(); pingTimer = nil
         receiveTask?.cancel(); receiveTask = nil
@@ -300,7 +342,7 @@ class BridgeService: ObservableObject {
         teardownSocket()
         isAuthenticated = false
         agentStatus = .idle
-        events = []; sessions = []; currentSessionId = nil
+        events = []; sessions = []; currentSessionId = nil; streamingText = ""
     }
 
     func setRelayURL(_ url: String) {
@@ -310,17 +352,19 @@ class BridgeService: ObservableObject {
         if isOnCellular { _connect() }
     }
 
+    // MARK: - Send helpers
     func send(_ dict: [String: String]) {
         guard let ws = webSocketTask,
               let data = try? JSONSerialization.data(withJSONObject: dict),
               let text = String(data: data, encoding: .utf8) else { return }
         ws.send(.string(text)) { _ in }
     }
-
-    func sendMessage(_ text: String) { send(["type": "message", "text": text]) }
+    func sendMessage(_ text: String)                   { send(["type": "message", "text": text]) }
+    func approveTool(toolId: String)                   { send(["type": "tool_approve", "toolId": toolId]) }
+    func denyTool(toolId: String)                      { send(["type": "tool_deny",    "toolId": toolId]) }
     func createSession(workdir: String, backend: String) { send(["type": "session_create", "workdir": workdir, "backend": backend]) }
-    func listSessions() { send(["type": "session_list"]) }
-    func requestFileTree(path: String) { send(["type": "file_tree", "path": path]) }
-    func requestFileContent(path: String) { send(["type": "file_read", "path": path]) }
-    private func sendPing() { lastPingSent = Date(); send(["type": "ping"]) }
+    func listSessions()                                { send(["type": "session_list"]) }
+    func requestFileTree(path: String)                 { send(["type": "file_tree", "path": path]) }
+    func requestFileContent(path: String)              { send(["type": "file_read",  "path": path]) }
+    private func sendPing()                            { lastPingSent = Date(); send(["type": "ping"]) }
 }
